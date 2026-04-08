@@ -77,11 +77,34 @@ def translate_blocks(blocks: list[dict], mode: str = "fixture") -> list[dict]:
         raise ValueError(f"Unknown translation mode: {mode}")
 
 
-# ---- Claude mode (wired in Phase 5) ----
+# ---- Claude mode (batched: one API call per document) ----
 
-_CLAUDE_SYSTEM = """You are a professional construction document translator.
-Translate the user's English construction text into Mexican Spanish using the
-following glossary and rules:
+_CLAUDE_SYSTEM = """You are a professional construction document translator for
+roofing crews. You translate fragments of an English construction document into
+Mexican Spanish.
+
+INPUT FORMAT
+You will receive a JSON array of objects: [{"i": <int>, "t": "<english>"}, ...]
+Each object is one text fragment from the SAME document. Fragments are short
+(checkbox labels, headers, table cells, single sentences) and may lack context
+on their own — that is normal. They came from a structured form.
+
+OUTPUT FORMAT (strict)
+Return ONLY a JSON array of objects with the same indices:
+[{"i": <int>, "t": "<spanish>"}, ...]
+No prose, no markdown, no code fences, no explanations. Just the JSON.
+
+TRANSLATION RULES
+- Translate every fragment. Never ask clarifying questions.
+- If a fragment is empty, whitespace, a number, a code, an address, a phone, an
+  email, or a proper name, return it UNCHANGED.
+- Preserve punctuation, colons, parentheses, and bullet markers exactly.
+- Keep imperial units (inches, feet, sq ft) and product model names unchanged
+  (e.g. Seal-A-Ridge, TimberTex, PWI/PWARR, RCV, ACV, RSPS, Direct TV).
+- Preserve checkbox label structure: "Yes" -> "Sí", "No" -> "No", "N/A" -> "N/A".
+- Use Mexican Spanish appropriate for construction crews (informal "tú" form,
+  trade vocabulary).
+- Keep translations roughly the same length as the source where possible.
 
 GLOSSARY (use consistently):
 - Shingle -> Teja
@@ -102,13 +125,36 @@ GLOSSARY (use consistently):
 - Tear off -> Desprendimiento
 - Box vent -> Ventilación de caja
 - Dryer vent -> Ventilación de secadora
-
-DO NOT TRANSLATE: proper names, addresses, phone numbers, emails, URLs,
-product model numbers (Seal-A-Ridge, TimberTex, PWI/PWARR), insurance
-abbreviations (RCV, ACV, RSPS), measurements (keep imperial units).
-
-Return ONLY the Spanish translation, no explanations.
+- Job Notes -> Notas del Trabajo
+- Homeowner -> Propietario
+- Adjuster -> Ajustador
+- Scope -> Alcance
+- Claim -> Reclamación
 """
+
+
+# Heuristics: blocks we never translate. Saves tokens and prevents Claude from
+# trying to "translate" things like phone numbers or addresses.
+import re as _re
+
+_NON_TRANSLATABLE_RE = _re.compile(
+    r"^[\s\W\d]*$"  # only whitespace, punctuation, digits
+    r"|^[A-Z]{1,5}$"  # ACV, RCV, RSPS, etc.
+    r"|^\+?\d[\d\s().\-]{6,}$"  # phone numbers
+    r"|^[\w.+-]+@[\w.-]+\.\w+$"  # email
+    r"|^https?://"  # URL
+)
+
+
+def _is_non_translatable(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return True
+    if _looks_translated(s):
+        return True
+    if _NON_TRANSLATABLE_RE.match(s):
+        return True
+    return False
 
 
 def _translate_claude(blocks: list[dict]) -> list[dict]:
@@ -124,20 +170,47 @@ def _translate_claude(blocks: list[dict]) -> list[dict]:
         raise RuntimeError("ANTHROPIC_API_KEY not set in environment.")
 
     client = Anthropic(api_key=api_key)
-    out = []
-    for b in blocks:
+
+    # Partition blocks into translatable vs pass-through
+    payload: list[dict[str, Any]] = []
+    for i, b in enumerate(blocks):
         text = b.get("text", "")
-        new = dict(b)
-        if not text.strip() or _looks_translated(text):
-            new["text"] = text
-            out.append(new)
+        if _is_non_translatable(text):
             continue
+        payload.append({"i": i, "t": text})
+
+    translations: dict[int, str] = {}
+    if payload:
+        # One API call for the whole document.
+        user_msg = json.dumps(payload, ensure_ascii=False)
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1024,
+            max_tokens=8192,
             system=_CLAUDE_SYSTEM,
-            messages=[{"role": "user", "content": text}],
+            messages=[{"role": "user", "content": user_msg}],
         )
-        new["text"] = msg.content[0].text.strip()
+        raw = msg.content[0].text.strip()
+        # Strip code fences if Claude wrapped the JSON
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        try:
+            parsed = json.loads(raw)
+            for item in parsed:
+                if isinstance(item, dict) and "i" in item and "t" in item:
+                    translations[int(item["i"])] = str(item["t"])
+        except (json.JSONDecodeError, ValueError, TypeError):
+            # If parsing fails, fall back to leaving English in place rather
+            # than stamping conversational error text onto the PDF.
+            pass
+
+    out = []
+    for i, b in enumerate(blocks):
+        new = dict(b)
+        if i in translations:
+            new["text"] = translations[i]
+        # else: leave the original English text untouched
         out.append(new)
     return out
