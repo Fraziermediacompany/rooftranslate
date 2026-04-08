@@ -1,13 +1,17 @@
-"""PDF rebuild module — the highest-risk step in the pipeline.
+"""PDF rebuild module — overlay approach (v1.1).
 
-Strategy:
-    1. Open the original PDF with pdfplumber to get page dimensions and any
-       images/lines we want to preserve.
-    2. Create a new PDF with ReportLab Canvas at the same dimensions.
-    3. For each translated block, draw the Spanish text at the original
-       coordinates with the original font size (or a slightly smaller size if
-       Spanish runs longer). Word-wrap if it overflows the original block width.
-    4. Re-emit images from the original at their original positions.
+Strategy (v1.1, "overlay rebuild"):
+    1. Open the original PDF with pypdf — this preserves EVERYTHING:
+       logos, table borders, checkboxes, vector graphics, embedded images.
+    2. For each page, generate a transparent reportlab overlay that:
+       a) Draws white-filled rectangles over each English text bbox
+          (covers the original English without disturbing surrounding graphics).
+       b) Draws the Spanish translation on top at the same coordinates,
+          with auto-fit (shrink + wrap) so longer Spanish strings don't collide.
+    3. Merge the overlay onto the original page via pypdf.merge_page().
+
+This is a major upgrade from the v1.0 "blank canvas rebuild" which lost all
+non-text content (logo, borders, checkboxes, highlights).
 
 Coordinate translation:
     pdfplumber: y=0 at top of page, y grows downward
@@ -17,20 +21,51 @@ Coordinate translation:
 from __future__ import annotations
 
 import io
-from typing import Any
 
-import pdfplumber
-from reportlab.lib.colors import black
+from pypdf import PdfReader, PdfWriter
+from reportlab.lib.colors import black, white
 from reportlab.pdfgen import canvas as rl_canvas
 
 
-# Font fallback: original PDFs often use embedded fonts (Lora, custom subsets)
-# that ReportLab doesn't have. Map to Helvetica family.
+# Padding (points) added around each English bbox when whiting out, to make
+# sure we don't leave behind any pixel-edge ghosts of the original text.
+WHITEOUT_PAD_X = 1.5
+WHITEOUT_PAD_Y = 1.0
+
+# Minimum font size we'll shrink to. Below this and we wrap instead.
+MIN_FONT_SIZE = 5.0
+
+# Unicode ligatures pdfplumber sometimes hands us as single chars. Helvetica
+# (and most ReportLab built-in fonts) don't have these glyphs, so they render
+# as a black square. Substitute with plain ASCII before drawing.
+_LIGATURES = {
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\ufb05": "st",
+    "\ufb06": "st",
+}
+
+
+def _normalize_text(s: str) -> str:
+    if not s:
+        return s
+    for k, v in _LIGATURES.items():
+        if k in s:
+            s = s.replace(k, v)
+    return s
+
+
+# ---------- font + text helpers ----------
+
 def _pick_font(orig_font: str | None, bold: bool) -> str:
+    """Map original PDF font to a ReportLab built-in Helvetica variant."""
     if not orig_font:
         return "Helvetica-Bold" if bold else "Helvetica"
     f = (orig_font or "").lower()
-    if bold or "bold" in f or "black" in f or "medium" in f:
+    if bold or "bold" in f or "black" in f or "heavy" in f or "medium" in f:
         return "Helvetica-Bold"
     if "italic" in f or "oblique" in f:
         return "Helvetica-Oblique"
@@ -56,57 +91,86 @@ def _wrap_text(c: rl_canvas.Canvas, text: str, font: str, size: float, max_width
     return lines
 
 
-def _fit_size(c: rl_canvas.Canvas, text: str, font: str, size: float, max_width: float) -> float:
-    """If a single-line text overflows max_width, shrink the font until it fits."""
+def _fit_single_line(c: rl_canvas.Canvas, text: str, font: str, size: float, max_width: float) -> float:
+    """Shrink font (down to MIN_FONT_SIZE) until single-line text fits max_width."""
     if max_width <= 0:
         return size
     s = size
-    while s > 5 and c.stringWidth(text, font, s) > max_width:
-        s -= 0.5
+    while s > MIN_FONT_SIZE and c.stringWidth(text, font, s) > max_width:
+        s -= 0.25
     return s
 
 
-def _draw_block(
-    c: rl_canvas.Canvas,
-    block: dict,
-    page_width: float,
-    page_height: float,
-) -> None:
-    text = block.get("text", "")
+# ---------- whiteout + draw ----------
+
+def _whiteout_block(c: rl_canvas.Canvas, block: dict, page_height: float) -> None:
+    """Draw a white rectangle over the original English bbox."""
+    if block.get("_drop"):
+        return
+    x = float(block.get("x", 0))
+    y_top = float(block.get("y", 0))
+    bw = float(block.get("width", 0)) or 0
+    bh = float(block.get("height", 0)) or float(block.get("size", 10) or 10)
+    if bw <= 0 or bh <= 0:
+        return
+    rl_y = page_height - y_top - bh - WHITEOUT_PAD_Y
+    c.setFillColor(white)
+    c.setStrokeColor(white)
+    c.rect(
+        x - WHITEOUT_PAD_X,
+        rl_y,
+        bw + (2 * WHITEOUT_PAD_X),
+        bh + (2 * WHITEOUT_PAD_Y),
+        fill=1,
+        stroke=0,
+    )
+
+
+def _draw_block(c: rl_canvas.Canvas, block: dict, page_width: float, page_height: float) -> None:
+    """Stamp the (translated) text on top of the whited-out region.
+
+    Uses original block bbox as the target. If the Spanish runs too long for the
+    original width, first try shrinking the font (auto-fit). If that would
+    shrink below the readable floor, fall back to multi-line wrapping at the
+    smallest tolerable font.
+    """
+    text = _normalize_text(block.get("text", ""))
     if not text or block.get("_drop"):
         return
 
     font = _pick_font(block.get("font"), block.get("bold", False))
     size = float(block.get("size", 10) or 10)
 
-    # Original block bbox
     x = float(block.get("x", 0))
-    y_top = float(block.get("y", 0))           # pdfplumber: top
+    y_top = float(block.get("y", 0))
     bw = float(block.get("width", 0)) or 0
-    bh = float(block.get("height", size)) or size
+    bh = float(block.get("height", 0)) or size
 
-    # Available width: prefer original block width, but allow some growth
-    # to the right margin since Spanish often runs ~15-25% longer.
-    right_margin = 36  # half-inch
-    max_width = max(bw, page_width - x - right_margin)
+    # Available width: stay inside the original block width whenever possible
+    # (so we don't bleed into adjacent columns). Only allow some growth if
+    # the original block was already near the right margin and Spanish runs over.
+    right_margin = 24  # ~1/3 inch
+    page_max = page_width - x - right_margin
+    target_width = bw if bw > 0 else page_max
+    # Hard cap so we never spill across the page edge
+    target_width = min(target_width, max(page_max, bw))
 
-    # Try a single line first; if it overflows, wrap.
-    if c.stringWidth(text, font, size) <= max_width:
+    # 1. If single line fits at original size, use it.
+    if c.stringWidth(text, font, size) <= target_width:
         lines = [text]
     else:
-        # First try shrinking — if that doesn't fit either, wrap.
-        shrunk = _fit_size(c, text, font, size, max_width)
-        if shrunk >= size - 1.0 or c.stringWidth(text, font, shrunk) <= max_width:
+        # 2. Try shrinking the font to fit a single line.
+        shrunk = _fit_single_line(c, text, font, size, target_width)
+        if c.stringWidth(text, font, shrunk) <= target_width:
             size = shrunk
-            lines = _wrap_text(c, text, font, size, max_width)
+            lines = [text]
         else:
-            lines = _wrap_text(c, text, font, size, max_width)
+            # 3. Wrap at the shrunk size (or original if shrink hit floor).
+            size = max(shrunk, MIN_FONT_SIZE)
+            lines = _wrap_text(c, text, font, size, target_width)
 
     leading = size * 1.18
-    # Convert pdf top-y -> reportlab baseline-y for first line
-    # In pdfplumber coords, "top" is the y of the top of the text bbox.
-    # ReportLab drawString draws at the baseline. We approximate baseline =
-    # page_height - top - size*0.85 (descender allowance).
+    # ReportLab draws at the baseline; pdfplumber gives us the top of the bbox.
     base_y = page_height - y_top - size * 0.85
 
     c.setFont(font, size)
@@ -117,64 +181,74 @@ def _draw_block(
         yy -= leading
 
 
-def _draw_images(c: rl_canvas.Canvas, page, page_height: float) -> None:
-    """Best-effort image preservation. Many PDFs use vector logos which
-    pdfplumber can't extract; we silently skip those for V1."""
-    try:
-        for img in page.images or []:
-            try:
-                x0 = float(img.get("x0", 0))
-                top = float(img.get("top", 0))
-                w = float(img.get("width", 0))
-                h = float(img.get("height", 0))
-                stream = img.get("stream")
-                if not (stream and w > 0 and h > 0):
-                    continue
-                raw = stream.get_data() if hasattr(stream, "get_data") else None
-                if not raw:
-                    continue
-                from reportlab.lib.utils import ImageReader  # type: ignore
-                ir = ImageReader(io.BytesIO(raw))
-                rl_y = page_height - top - h
-                c.drawImage(ir, x0, rl_y, width=w, height=h, mask="auto")
-            except Exception:
-                continue
-    except Exception:
-        pass
+# ---------- main entry point ----------
+
+def _build_overlay(blocks: list[dict], page_width: float, page_height: float) -> bytes:
+    """Build a single-page reportlab PDF (whiteout + Spanish text) for one page.
+
+    Returned as raw PDF bytes for pypdf to merge onto the original.
+    """
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=(page_width, page_height))
+
+    # Layer 1: whiteout all original English text bboxes
+    for block in blocks:
+        _whiteout_block(c, block, page_height)
+
+    # Layer 2: draw translated Spanish text on top
+    for block in blocks:
+        _draw_block(c, block, page_width, page_height)
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 def rebuild_pdf(original_path: str, translated_pages: list[dict], output_path: str) -> None:
-    """Rebuild a translated PDF.
+    """Rebuild a translated PDF using the v1.1 overlay approach.
 
-    `translated_pages` is the list of page dicts from extract_pdf, with each
-    block's `text` field already replaced by the Spanish translation. We use
-    the original PDF only for page dimensions and image preservation.
+    Loads the original with pypdf (preserves logos, borders, checkboxes, all
+    vector graphics), then merges a per-page reportlab overlay containing
+    whiteout rectangles and the Spanish text.
     """
-    with pdfplumber.open(original_path) as pdf:
-        if not pdf.pages:
-            raise ValueError("Empty PDF")
-        # Use first page size for canvas init; we'll setPageSize per page
-        first = pdf.pages[0]
-        c = rl_canvas.Canvas(output_path, pagesize=(float(first.width), float(first.height)))
+    reader = PdfReader(original_path)
+    writer = PdfWriter()
 
-        for i, orig_page in enumerate(pdf.pages):
-            pw = float(orig_page.width)
-            ph = float(orig_page.height)
-            c.setPageSize((pw, ph))
+    if not reader.pages:
+        raise ValueError("Empty PDF")
 
-            # Draw images first (background layer)
-            _draw_images(c, orig_page, ph)
+    for i, orig_page in enumerate(reader.pages):
+        # Page dimensions from the original (in PDF points)
+        try:
+            pw = float(orig_page.mediabox.width)
+            ph = float(orig_page.mediabox.height)
+        except Exception:
+            # Fallback to US Letter if mediabox is missing
+            pw, ph = 612.0, 792.0
 
-            # Then text
-            page_data = translated_pages[i] if i < len(translated_pages) else {"blocks": []}
-            for block in page_data.get("blocks", []):
-                _draw_block(c, block, pw, ph)
+        page_data = translated_pages[i] if i < len(translated_pages) else {"blocks": []}
+        blocks = page_data.get("blocks", []) or []
 
-            c.showPage()
+        if blocks:
+            overlay_bytes = _build_overlay(blocks, pw, ph)
+            overlay_reader = PdfReader(io.BytesIO(overlay_bytes))
+            if overlay_reader.pages:
+                overlay_page = overlay_reader.pages[0]
+                # Merge overlay ON TOP of the original page content.
+                # This preserves the logo, borders, checkboxes, highlights, etc.
+                try:
+                    orig_page.merge_page(overlay_page)
+                except Exception:
+                    # If merge fails for any reason, fall back to original page
+                    # (better to ship English than crash the whole job).
+                    pass
 
-        c.save()
+        writer.add_page(orig_page)
+
+    with open(output_path, "wb") as f:
+        writer.write(f)
 
 
-# Convenience helper: end-to-end rebuild from extracted+translated structure
+# Convenience helper kept for compatibility with pipeline.py
 def rebuild_from_extract(original_path: str, extracted: dict, output_path: str) -> None:
     rebuild_pdf(original_path, extracted.get("pages", []), output_path)
