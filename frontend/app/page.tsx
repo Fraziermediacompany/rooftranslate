@@ -107,32 +107,38 @@ function RoofLoader() {
         viewBox="0 0 200 180"
         className="w-52 h-52"
         aria-label="Building roof loader"
+        style={{
+          // Faux 3D yaw rotation: tilts the whole flat SVG illustration
+          // to the left in space, as if the house turned 40° on a turntable.
+          transform: "perspective(700px) rotateY(-40deg)",
+          transformOrigin: "center center",
+        }}
       >
         <defs>
-          {/* ----- Surface gradients (faux 3D shading) ----- */}
+          {/* ----- Surface gradients (white walls with subtle shading for depth) ----- */}
           <linearGradient id="frontWall" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#3f3f46" />
-            <stop offset="100%" stopColor="#27272a" />
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="100%" stopColor="#e4e4e7" />
           </linearGradient>
           <linearGradient id="sideWall" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#27272a" />
-            <stop offset="100%" stopColor="#18181b" />
+            <stop offset="0%" stopColor="#d4d4d8" />
+            <stop offset="100%" stopColor="#a1a1aa" />
           </linearGradient>
           <linearGradient id="gable" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#52525b" />
-            <stop offset="100%" stopColor="#3f3f46" />
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="100%" stopColor="#e4e4e7" />
           </linearGradient>
           <linearGradient id="roofBase" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#1e293b" />
-            <stop offset="100%" stopColor="#0f172a" />
+            <stop offset="0%" stopColor="#a1a1aa" />
+            <stop offset="100%" stopColor="#71717a" />
           </linearGradient>
 
-          {/* ----- Shingle gradient (highlight band, mid, shadow, edge) ----- */}
+          {/* ----- Shingle gradient (white with soft shading for tile depth) ----- */}
           <linearGradient id="shingle" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#94a3b8" />
-            <stop offset="35%" stopColor="#64748b" />
-            <stop offset="80%" stopColor="#334155" />
-            <stop offset="100%" stopColor="#1e293b" />
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="35%" stopColor="#f4f4f5" />
+            <stop offset="80%" stopColor="#d4d4d8" />
+            <stop offset="100%" stopColor="#a1a1aa" />
           </linearGradient>
 
           {/* ----- Light sweep gradient (specular highlight) ----- */}
@@ -221,13 +227,13 @@ function RoofLoader() {
             points="55,140 130,140 130,90 55,90"
             fill="url(#frontWall)"
           />
-          {/* Front-corner edge highlight (where front meets side) */}
+          {/* Front-corner edge shadow line (where front meets side) */}
           <line
             x1="130"
             y1="90"
             x2="130"
             y2="140"
-            stroke="#52525b"
+            stroke="#a1a1aa"
             strokeWidth="0.6"
           />
 
@@ -344,18 +350,6 @@ function RoofLoader() {
           strokeWidth="0.7"
         />
 
-        {/* Frazier-red ridge cap accent at the gable peak */}
-        <circle cx="92" cy="55" r="2.4" fill={FM_RED} />
-        <circle
-          cx="92"
-          cy="55"
-          r="2.4"
-          fill="none"
-          stroke={FM_RED}
-          strokeOpacity="0.4"
-          strokeWidth="2"
-          className="ridge-pulse"
-        />
       </svg>
 
       {/* Tagline pair, bilingual, crossfading */}
