@@ -183,12 +183,17 @@ def _translate_claude(blocks: list[dict]) -> list[dict]:
     if payload:
         # One API call for the whole document.
         user_msg = json.dumps(payload, ensure_ascii=False)
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
-            system=_CLAUDE_SYSTEM,
-            messages=[{"role": "user", "content": user_msg}],
-        )
+        try:
+            msg = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=8192,
+                system=_CLAUDE_SYSTEM,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+        except Exception as e:  # noqa: BLE001
+            # Surface a recognizable error string so the API endpoint can
+            # translate it into a friendly user-facing 422 message.
+            raise RuntimeError(f"Anthropic API error: {e}") from e
         raw = msg.content[0].text.strip()
         # Strip code fences if Claude wrapped the JSON
         if raw.startswith("```"):

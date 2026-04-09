@@ -100,6 +100,17 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [zipUrl, setZipUrl] = useState<string | null>(null);
 
+  // Cold-start warmup: ping the backend on page load so Render's free tier
+  // is awake by the time the user picks a PDF and clicks Translate. This
+  // shaves the perceived wait by ~25 seconds for the first user of the day.
+  useEffect(() => {
+    fetch(`${API_URL}/health`, { method: "GET", cache: "no-store" }).catch(
+      () => {
+        /* warmup is best-effort; never surface errors */
+      },
+    );
+  }, []);
+
   const onDrop = useCallback(
     (accepted: File[], rejected: FileRejection[]) => {
       setError(null);
@@ -338,6 +349,10 @@ export default function Home() {
               <span>
                 RoofTranslate v1.1 · A Frazier Media tool · text-based PDFs only
               </span>
+            </div>
+            <div className="mt-2 text-zinc-700">
+              Files are processed in memory and deleted immediately. We never
+              store your PDFs.
             </div>
           </footer>
         </div>

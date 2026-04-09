@@ -1,7 +1,8 @@
 """FastAPI app — exposes POST /translate.
 
 Accepts multipart PDF uploads, runs them through the pipeline, and returns
-a ZIP of translated PDFs. CORS open for dev.
+a ZIP of translated PDFs (or a single 422 if a single-file request fails
+at the pipeline level — e.g. a scanned/image-only PDF).
 """
 from __future__ import annotations
 
@@ -9,21 +10,38 @@ import os
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
-from .pipeline import process_many
+from .pipeline import ScannedPDFError, process_many, process_pdf
 
 
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB per file
 ALLOWED_EXTS = {".pdf"}
 
-app = FastAPI(title="RoofTranslate API", version="0.1.0")
+# Allowed origins for the live frontend. Add new domains here as needed.
+ALLOWED_ORIGINS = [
+    "https://rooftranslate.com",
+    "https://www.rooftranslate.com",
+    "http://localhost:3000",
+    "http://localhost:3001",
+]
+# Allow any *.vercel.app preview deploy too (regex match in CORS).
+ALLOW_ORIGIN_REGEX = r"https://.*\.vercel\.app"
+
+limiter = Limiter(key_func=get_remote_address)
+app = FastAPI(title="RoofTranslate API", version="0.2.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOW_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -31,7 +49,7 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"name": "RoofTranslate API", "version": "0.1.0", "ok": True}
+    return {"name": "RoofTranslate API", "version": "0.2.0", "ok": True}
 
 
 @app.get("/health")
@@ -40,7 +58,8 @@ def health():
 
 
 @app.post("/translate")
-async def translate(files: list[UploadFile] = File(...)):
+@limiter.limit("10/hour")
+async def translate(request: Request, files: list[UploadFile] = File(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
 
@@ -79,8 +98,59 @@ async def translate(files: list[UploadFile] = File(...)):
                 out.write(data)
             staged_paths.append(dst)
 
+        # Single-file fast path: if it fails (scanned PDF, Anthropic outage),
+        # surface a friendly 422 instead of stuffing an error.txt in a zip.
+        if len(staged_paths) == 1:
+            single_in = staged_paths[0]
+            stem = Path(single_in).stem
+            tmp_out = os.path.join(tmp_dir, f"_out_{stem}.pdf")
+            result = process_pdf(single_in, tmp_out)
+            if not result["success"]:
+                err = result.get("error") or "Translation failed."
+                # Detect known failure modes for cleaner messages
+                if "no extractable text" in err.lower() or "scanned" in err.lower():
+                    msg = (
+                        "This PDF looks like a scanned image. RoofTranslate "
+                        "currently only works on text-based PDFs. Try exporting "
+                        "from the original document instead of scanning a printout."
+                    )
+                elif "anthropic" in err.lower() or "api" in err.lower() or "rate" in err.lower():
+                    msg = (
+                        "Our translation service is temporarily unavailable. "
+                        "Please try again in a minute."
+                    )
+                else:
+                    msg = f"Translation failed: {err}"
+                return JSONResponse(status_code=422, content={"detail": msg})
+
+            # Success: read the single output and return it as a 1-file ZIP
+            # so the frontend code path stays uniform.
+            import io
+            import zipfile
+
+            zbuf = io.BytesIO()
+            with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
+                with open(tmp_out, "rb") as fh:
+                    zf.writestr(f"{stem} - Spanish.pdf", fh.read())
+            try:
+                os.remove(tmp_out)
+            except OSError:
+                pass
+            return Response(
+                content=zbuf.getvalue(),
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": 'attachment; filename="rooftranslate-bundle.zip"'
+                },
+            )
+
+        # Multi-file path: ZIP everything together; per-file errors land as
+        # ERROR.txt entries inside the bundle so the user still gets the
+        # files that did succeed.
         try:
             zip_bytes = process_many(staged_paths)
+        except ScannedPDFError as e:
+            return JSONResponse(status_code=422, content={"detail": str(e)})
         except Exception as e:  # noqa: BLE001
             return JSONResponse(
                 status_code=500,
@@ -95,7 +165,8 @@ async def translate(files: list[UploadFile] = File(...)):
             },
         )
     finally:
-        # Cleanup staged uploads
+        # Cleanup staged uploads (privacy promise: nothing persists past the
+        # request lifecycle on the server).
         for p in staged_paths:
             try:
                 os.remove(p)
