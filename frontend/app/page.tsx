@@ -44,14 +44,49 @@ const TAGLINES: { es: string; en: string }[] = [
   { es: "Casi listo…", en: "Almost ready…" },
 ];
 
-// Build the shingle grid: 4 rows × 7 columns. Row width tapers near the apex
-// so the result reads as a pitched roof, not a wall.
-const SHINGLE_ROWS = [
-  { y: 22, count: 3, w: 6, gap: 1 },
-  { y: 28, count: 5, w: 6, gap: 1 },
-  { y: 34, count: 7, w: 6, gap: 1 },
-  { y: 40, count: 9, w: 6, gap: 1 },
-];
+// ---------- Isometric shingle layout ----------
+// The visible roof slope is a parallelogram defined by 4 points:
+//   ridge-front (92,55) → eave-front (130,90) → eave-back (165,75) → ridge-back (127,40)
+// Two basis vectors describe how to walk across that slope:
+//   SLOPE_VEC: ridge → eave   (down the pitch)
+//   DEPTH_VEC: front → back   (along the ridge into perspective)
+// Each shingle is a small parallelogram tiled in (row, col) coordinates.
+const SLOPE_ORIGIN = { x: 92, y: 55 };
+const SLOPE_VEC = { x: 38, y: 35 };
+const DEPTH_VEC = { x: 35, y: -15 };
+const SHINGLE_ROWS_COUNT = 4;
+const SHINGLE_COLS_COUNT = 5;
+
+type Shingle = { points: string; delay: number };
+
+function buildShingles(): Shingle[] {
+  const out: Shingle[] = [];
+  const gap = 0.04;
+  const at = (s: number, d: number) => ({
+    x: SLOPE_ORIGIN.x + SLOPE_VEC.x * s + DEPTH_VEC.x * d,
+    y: SLOPE_ORIGIN.y + SLOPE_VEC.y * s + DEPTH_VEC.y * d,
+  });
+  for (let row = 0; row < SHINGLE_ROWS_COUNT; row++) {
+    for (let col = 0; col < SHINGLE_COLS_COUNT; col++) {
+      const sa = row / SHINGLE_ROWS_COUNT + gap;
+      const sb = (row + 1) / SHINGLE_ROWS_COUNT - gap;
+      const da = col / SHINGLE_COLS_COUNT + gap;
+      const db = (col + 1) / SHINGLE_COLS_COUNT - gap;
+      const tl = at(sa, da);
+      const tr = at(sa, db);
+      const br = at(sb, db);
+      const bl = at(sb, da);
+      out.push({
+        points: `${tl.x.toFixed(1)},${tl.y.toFixed(1)} ${tr.x.toFixed(1)},${tr.y.toFixed(1)} ${br.x.toFixed(1)},${br.y.toFixed(1)} ${bl.x.toFixed(1)},${bl.y.toFixed(1)}`,
+        // Stagger from top-back to bottom-front for a natural cascade
+        delay: row * 0.16 + col * 0.05,
+      });
+    }
+  }
+  return out;
+}
+
+const SHINGLES: Shingle[] = buildShingles();
 
 function RoofLoader() {
   const [tagIdx, setTagIdx] = useState(0);
@@ -69,71 +104,264 @@ function RoofLoader() {
   return (
     <div className="flex flex-col items-center">
       <svg
-        viewBox="0 0 120 100"
-        className="w-40 h-40"
+        viewBox="0 0 200 180"
+        className="w-52 h-52"
         aria-label="Building roof loader"
       >
-        {/* House body */}
-        <rect
-          x="22"
-          y="50"
-          width="76"
-          height="40"
-          fill="none"
-          stroke="#52525b"
-          strokeWidth="1.6"
-          className="house-frame"
-        />
-        {/* Door */}
-        <rect
-          x="52"
-          y="68"
-          width="16"
-          height="22"
-          fill="none"
-          stroke="#52525b"
-          strokeWidth="1.4"
-          className="house-frame"
-        />
-        {/* Roof outline (triangle) */}
-        <path
-          d="M14 50 L60 14 L106 50 Z"
-          fill="none"
-          stroke="#52525b"
-          strokeWidth="1.6"
-          className="house-frame"
-        />
-        {/* Frazier-red ridge cap on top */}
-        <circle cx="60" cy="14" r="1.8" fill={FM_RED} />
+        <defs>
+          {/* ----- Surface gradients (faux 3D shading) ----- */}
+          <linearGradient id="frontWall" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#3f3f46" />
+            <stop offset="100%" stopColor="#27272a" />
+          </linearGradient>
+          <linearGradient id="sideWall" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#27272a" />
+            <stop offset="100%" stopColor="#18181b" />
+          </linearGradient>
+          <linearGradient id="gable" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#52525b" />
+            <stop offset="100%" stopColor="#3f3f46" />
+          </linearGradient>
+          <linearGradient id="roofBase" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#1e293b" />
+            <stop offset="100%" stopColor="#0f172a" />
+          </linearGradient>
 
-        {/* Shingles — staggered animation delay across row+col so they cascade */}
-        {SHINGLE_ROWS.map((row, rowIdx) => {
-          const totalWidth = row.count * row.w + (row.count - 1) * row.gap;
-          const startX = 60 - totalWidth / 2;
-          return Array.from({ length: row.count }).map((_, colIdx) => {
-            const x = startX + colIdx * (row.w + row.gap);
-            const delay = rowIdx * 0.28 + colIdx * 0.06;
-            return (
-              <rect
-                key={`${rowIdx}-${colIdx}`}
-                x={x}
-                y={row.y}
-                width={row.w}
-                height={4}
-                rx={0.6}
-                fill="#3b82f6"
-                className="shingle"
-                style={{ animationDelay: `${delay}s` }}
-              />
-            );
-          });
-        })}
+          {/* ----- Shingle gradient (highlight band, mid, shadow, edge) ----- */}
+          <linearGradient id="shingle" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#94a3b8" />
+            <stop offset="35%" stopColor="#64748b" />
+            <stop offset="80%" stopColor="#334155" />
+            <stop offset="100%" stopColor="#1e293b" />
+          </linearGradient>
+
+          {/* ----- Light sweep gradient (specular highlight) ----- */}
+          <linearGradient id="lightSweep" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="white" stopOpacity="0" />
+            <stop offset="50%" stopColor="white" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="white" stopOpacity="0" />
+          </linearGradient>
+
+          {/* ----- Ground shadow (radial) ----- */}
+          <radialGradient id="groundShadow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0%" stopColor="black" stopOpacity="0.55" />
+            <stop offset="100%" stopColor="black" stopOpacity="0" />
+          </radialGradient>
+
+          {/* ----- Drop shadow filter for the whole house ----- */}
+          <filter id="houseShadow" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="2.2" />
+            <feOffset dx="2" dy="3" result="off" />
+            <feComponentTransfer>
+              <feFuncA type="linear" slope="0.45" />
+            </feComponentTransfer>
+            <feMerge>
+              <feMergeNode />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+
+          {/* ----- Subtle inner shadow for shingle depth ----- */}
+          <filter id="shingleDepth" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="0.4" />
+            <feOffset dx="0.4" dy="0.6" result="off" />
+            <feComponentTransfer>
+              <feFuncA type="linear" slope="0.6" />
+            </feComponentTransfer>
+            <feMerge>
+              <feMergeNode />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+
+          {/* ----- Clip path so the light sweep only shows on the roof slope ----- */}
+          <clipPath id="roofClip">
+            <polygon points="92,55 130,90 165,75 127,40" />
+          </clipPath>
+
+          {/* ----- Wood-plank pattern for the door ----- */}
+          <pattern
+            id="doorPlanks"
+            x="0"
+            y="0"
+            width="3"
+            height="25"
+            patternUnits="userSpaceOnUse"
+          >
+            <rect width="3" height="25" fill="#1c1917" />
+            <line
+              x1="3"
+              y1="0"
+              x2="3"
+              y2="25"
+              stroke="#0c0a09"
+              strokeWidth="0.4"
+            />
+          </pattern>
+        </defs>
+
+        {/* Soft ground shadow under the house */}
+        <ellipse
+          cx="108"
+          cy="155"
+          rx="75"
+          ry="6"
+          fill="url(#groundShadow)"
+        />
+
+        {/* House body — wrapped in drop-shadow filter */}
+        <g filter="url(#houseShadow)">
+          {/* Side wall (right side, in slight shadow) */}
+          <polygon
+            points="130,140 165,125 165,75 130,90"
+            fill="url(#sideWall)"
+          />
+          {/* Front wall */}
+          <polygon
+            points="55,140 130,140 130,90 55,90"
+            fill="url(#frontWall)"
+          />
+          {/* Front-corner edge highlight (where front meets side) */}
+          <line
+            x1="130"
+            y1="90"
+            x2="130"
+            y2="140"
+            stroke="#52525b"
+            strokeWidth="0.6"
+          />
+
+          {/* Gable triangle */}
+          <polygon points="55,90 130,90 92,55" fill="url(#gable)" />
+          {/* Eave line at top of front wall */}
+          <line
+            x1="55"
+            y1="90"
+            x2="130"
+            y2="90"
+            stroke="#0a0a0c"
+            strokeWidth="0.5"
+          />
+
+          {/* Roof slope base layer (dark, under shingles) */}
+          <polygon
+            points="92,55 130,90 165,75 127,40"
+            fill="url(#roofBase)"
+          />
+        </g>
+
+        {/* Window on the front wall — 4-pane */}
+        <g>
+          <rect
+            x="66"
+            y="100"
+            width="16"
+            height="16"
+            fill="#0a0a0c"
+            stroke="#52525b"
+            strokeWidth="0.5"
+          />
+          <line
+            x1="74"
+            y1="100"
+            x2="74"
+            y2="116"
+            stroke="#52525b"
+            strokeWidth="0.4"
+          />
+          <line
+            x1="66"
+            y1="108"
+            x2="82"
+            y2="108"
+            stroke="#52525b"
+            strokeWidth="0.4"
+          />
+          {/* Window glow (warm interior light, very subtle) */}
+          <rect
+            x="66.6"
+            y="100.6"
+            width="14.8"
+            height="14.8"
+            fill="#fbbf24"
+            opacity="0.08"
+          />
+        </g>
+
+        {/* Door with wood-plank pattern */}
+        <g>
+          <rect
+            x="92"
+            y="115"
+            width="22"
+            height="25"
+            fill="url(#doorPlanks)"
+            stroke="#52525b"
+            strokeWidth="0.5"
+          />
+          {/* Doorknob */}
+          <circle cx="110" cy="128" r="0.8" fill="#d4af37" />
+        </g>
+
+        {/* Shingles cascading on the slanted roof slope */}
+        <g>
+          {SHINGLES.map((s, i) => (
+            <polygon
+              key={i}
+              points={s.points}
+              fill="url(#shingle)"
+              className="shingle"
+              filter="url(#shingleDepth)"
+              style={{ animationDelay: `${s.delay}s` }}
+            />
+          ))}
+        </g>
+
+        {/* Animated light sweep — clipped to the roof slope.
+            Outer <g> handles the rotation (matches roof slope angle).
+            Inner <rect> handles the translation animation. */}
+        <g clipPath="url(#roofClip)">
+          <g transform="rotate(-22 100 70)">
+            <rect
+              x="-40"
+              y="20"
+              width="50"
+              height="100"
+              fill="url(#lightSweep)"
+              className="light-sweep"
+              style={{ pointerEvents: "none" }}
+            />
+          </g>
+        </g>
+
+        {/* Ridge line (where the front gable meets the side roof) */}
+        <line
+          x1="92"
+          y1="55"
+          x2="127"
+          y2="40"
+          stroke="#0a0a0c"
+          strokeWidth="0.7"
+        />
+
+        {/* Frazier-red ridge cap accent at the gable peak */}
+        <circle cx="92" cy="55" r="2.4" fill={FM_RED} />
+        <circle
+          cx="92"
+          cy="55"
+          r="2.4"
+          fill="none"
+          stroke={FM_RED}
+          strokeOpacity="0.4"
+          strokeWidth="2"
+          className="ridge-pulse"
+        />
       </svg>
 
       {/* Tagline pair, bilingual, crossfading */}
       <div
         key={tagIdx}
-        className="mt-2 text-center"
+        className="mt-1 text-center"
         style={{ animation: "tagline-fade 2.4s ease-in-out" }}
       >
         <div className="text-base text-zinc-100 font-medium">{tag.es}</div>

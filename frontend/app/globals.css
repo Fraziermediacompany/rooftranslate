@@ -48,3 +48,32 @@ body {
   15%, 85% { opacity: 1; transform: translateY(0); }
 }
 
+/* Specular light sweep moving across the roof slope.
+   The rotation is handled by an outer <g> in the SVG; this animation only
+   needs to translate the inner rect along its (already rotated) X axis. */
+@keyframes light-sweep {
+  0%   { transform: translateX(0px); opacity: 0; }
+  15%  { opacity: 0.9; }
+  85%  { opacity: 0.9; }
+  100% { transform: translateX(220px); opacity: 0; }
+}
+
+.light-sweep {
+  animation: light-sweep 4.8s ease-in-out infinite;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+/* Frazier-red ridge cap accent: a soft pulsing halo around the gable peak.
+   Animates opacity + scale on a wrapping <g> rather than the SVG `r`
+   attribute (which doesn't animate reliably across browsers). */
+@keyframes ridge-pulse {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(1.7); }
+}
+
+.ridge-pulse {
+  transform-origin: 92px 55px;
+  animation: ridge-pulse 2.4s ease-in-out infinite;
+}
+
