@@ -4,19 +4,26 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDropzone, type FileRejection } from "react-dropzone";
 
 // ---------- Frazier Media chevron ----------
-// Marlboro-red rooftop chevron — doubles as a brand mark and a literal roof.
-const FM_RED = "#E10600";
+// The Frazier Media mark: a red rectangle with a triangular notch cut out of
+// the bottom center. The notch creates an upward-pointing roofline silhouette
+// in the negative space. Marlboro-pack inspired.
+const FM_RED = "#D62828";
 
-function FrazierChevron({ size = 18 }: { size?: number }) {
+function FrazierChevron({ size = 22 }: { size?: number }) {
+  // viewBox 100×80, notch apex at (50, 28) — about 65% of the way up from
+  // the bottom, matching the proportions of the real Frazier Media logo.
   return (
     <svg
       width={size}
-      height={size * 0.78}
-      viewBox="0 0 24 18"
+      height={size * 0.8}
+      viewBox="0 0 100 80"
       fill="none"
       aria-hidden="true"
     >
-      <path d="M12 1 L23 17 L1 17 Z" fill={FM_RED} />
+      <path
+        d="M0 0 L100 0 L100 80 L50 28 L0 80 Z"
+        fill={FM_RED}
+      />
     </svg>
   );
 }
