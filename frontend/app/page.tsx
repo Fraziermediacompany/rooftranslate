@@ -347,7 +347,7 @@ export default function Home() {
             <div className="flex items-center justify-center gap-1.5">
               <FrazierChevron size={9} />
               <span>
-                RoofTranslate v1.1 · A Frazier Media tool · text-based PDFs only
+                RoofTranslate v1.2 · A Frazier Media tool · text-based PDFs only
               </span>
             </div>
             <div className="mt-2 text-zinc-700">
