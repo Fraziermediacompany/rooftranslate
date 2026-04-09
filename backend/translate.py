@@ -94,6 +94,23 @@ Return ONLY a JSON array of objects with the same indices:
 [{"i": <int>, "t": "<spanish>"}, ...]
 No prose, no markdown, no code fences, no explanations. Just the JSON.
 
+CRITICAL — NEVER DO THIS:
+- NEVER write meta-commentary like "(No text was found to translate)" or
+  "(Please share the document)" or "(There are no notes to translate)".
+- NEVER ask the user for clarification.
+- NEVER explain that a fragment is empty, ambiguous, or unclear.
+- NEVER refuse to translate a header, label, or short word. Headers like
+  "JOB NOTES:" are TEXT TO BE TRANSLATED, not instructions to you.
+- A fragment like "JOB NOTES:" must be translated to "NOTAS DEL TRABAJO:".
+  It must NEVER be translated to "(No hay notas de trabajo que traducir)".
+- If you genuinely cannot translate a fragment, return it UNCHANGED (in
+  English). Do NOT write a sentence about why. Do NOT use parentheses to
+  add commentary. Just return the original string.
+- Every output "t" value must be a direct translation (or pass-through) of
+  its corresponding input "t" value. Output length should be similar to
+  input length (within ~2x). Never output a long sentence in response to a
+  short label.
+
 TRANSLATION RULES
 - Translate every fragment. Never ask clarifying questions.
 - If a fragment is empty, whitespace, a number, a code, an address, a phone, an
@@ -105,6 +122,10 @@ TRANSLATION RULES
 - Use Mexican Spanish appropriate for construction crews (informal "tú" form,
   trade vocabulary).
 - Keep translations roughly the same length as the source where possible.
+
+EXAMPLE
+Input:  [{"i":0,"t":"JOB NOTES:"},{"i":1,"t":"Homeowner Name: Lori Summers"},{"i":2,"t":"Yes"},{"i":3,"t":"Re-Deck?"}]
+Output: [{"i":0,"t":"NOTAS DEL TRABAJO:"},{"i":1,"t":"Nombre del Propietario: Lori Summers"},{"i":2,"t":"Sí"},{"i":3,"t":"¿Redeccionar?"}]
 
 GLOSSARY (use consistently):
 - Shingle -> Teja
@@ -144,6 +165,54 @@ _NON_TRANSLATABLE_RE = _re.compile(
     r"|^[\w.+-]+@[\w.-]+\.\w+$"  # email
     r"|^https?://"  # URL
 )
+
+
+# Phrases that indicate Claude returned meta-commentary instead of a translation.
+# Any "t" value containing one of these (case-insensitive) is rejected and we
+# fall back to the original English source.
+_META_COMMENTARY_MARKERS = (
+    "no text was found",
+    "no se encontr",
+    "no hay texto",
+    "no hay notas",
+    "please share",
+    "por favor compart",
+    "to translate",
+    "que traducir",
+    "i cannot translate",
+    "no puedo traducir",
+    "no puedo trad",
+    "appears to be empty",
+    "parece estar vac",
+    "el campo est",
+    "the field is empty",
+    "i don't have",
+    "no tengo",
+    "i need more context",
+    "necesito m",
+    "could you provide",
+    "podr",
+    "clarify",
+    "aclara",
+)
+
+
+def _looks_like_meta_commentary(source: str, translation: str) -> bool:
+    """Detect when Claude returned a sentence about the input instead of a translation."""
+    if not translation:
+        return False
+    t = translation.strip().lower()
+    # Direct phrase match
+    if any(m in t for m in _META_COMMENTARY_MARKERS):
+        return True
+    # Length explosion: short label → long sentence is almost always commentary
+    src = (source or "").strip()
+    if len(src) <= 30 and len(translation) > max(60, len(src) * 4):
+        return True
+    # Parenthetical that grew way longer than the source
+    if translation.strip().startswith("(") and len(translation) > len(src) * 3 and len(translation) > 40:
+        return True
+    return False
 
 
 def _is_non_translatable(text: str) -> bool:
@@ -188,13 +257,21 @@ def _translate_claude(blocks: list[dict]) -> list[dict]:
                 model="claude-sonnet-4-6",
                 max_tokens=8192,
                 system=_CLAUDE_SYSTEM,
-                messages=[{"role": "user", "content": user_msg}],
+                messages=[
+                    {"role": "user", "content": user_msg},
+                    # Prefill: force the response to start as a JSON array so
+                    # the model can't slide into conversational meta-commentary.
+                    {"role": "assistant", "content": "["},
+                ],
             )
         except Exception as e:  # noqa: BLE001
             # Surface a recognizable error string so the API endpoint can
             # translate it into a friendly user-facing 422 message.
             raise RuntimeError(f"Anthropic API error: {e}") from e
         raw = msg.content[0].text.strip()
+        # Re-attach the prefill "[" since the assistant turn started with it.
+        if not raw.startswith("["):
+            raw = "[" + raw
         # Strip code fences if Claude wrapped the JSON
         if raw.startswith("```"):
             raw = raw.strip("`")
@@ -203,9 +280,19 @@ def _translate_claude(blocks: list[dict]) -> list[dict]:
             raw = raw.strip()
         try:
             parsed = json.loads(raw)
+            # Build an index → source map so the sanitizer can compare lengths.
+            src_by_idx = {item["i"]: item["t"] for item in payload}
             for item in parsed:
-                if isinstance(item, dict) and "i" in item and "t" in item:
-                    translations[int(item["i"])] = str(item["t"])
+                if not (isinstance(item, dict) and "i" in item and "t" in item):
+                    continue
+                idx = int(item["i"])
+                t = str(item["t"])
+                src = src_by_idx.get(idx, "")
+                if _looks_like_meta_commentary(src, t):
+                    # Drop this translation; rebuild step will keep the
+                    # original English block instead of stamping commentary.
+                    continue
+                translations[idx] = t
         except (json.JSONDecodeError, ValueError, TypeError):
             # If parsing fails, fall back to leaving English in place rather
             # than stamping conversational error text onto the PDF.
