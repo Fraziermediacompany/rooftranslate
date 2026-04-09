@@ -12,12 +12,15 @@ const FM_RED = "#D62828";
 function FrazierChevron({ size = 22 }: { size?: number }) {
   // viewBox 100×80, notch apex at (50, 28) — about 65% of the way up from
   // the bottom, matching the proportions of the real Frazier Media logo.
+  // Rendered height is squished 15% (0.8 * 0.85 = 0.68) for a slightly more
+  // compact, "just right" feel per Garrett's eye on the brand mark.
   return (
     <svg
       width={size}
-      height={size * 0.8}
+      height={size * 0.68}
       viewBox="0 0 100 80"
       fill="none"
+      preserveAspectRatio="none"
       aria-hidden="true"
     >
       <path
