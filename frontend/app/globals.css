@@ -11,3 +11,40 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ---------- Building-roof loader ----------
+   Each shingle fades in (with a tiny vertical drop) on a staggered delay,
+   holds for the bulk of the cycle, then fades out so the roof rebuilds.
+   Combined cycle = 3.6s — long enough to feel paced, short enough to keep
+   crews engaged during the ~30s Render cold start. */
+@keyframes shingle-build {
+  0%   { opacity: 0; transform: translateY(-4px); }
+  12%  { opacity: 1; transform: translateY(0); }
+  82%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(0); }
+}
+
+.shingle {
+  opacity: 0;
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: shingle-build 3.6s ease-in-out infinite;
+}
+
+/* Subtle "I'm alive" pulse for the house frame so it never looks frozen
+   even between shingle cycles. */
+@keyframes frame-glow {
+  0%, 100% { stroke-opacity: 0.55; }
+  50%      { stroke-opacity: 0.85; }
+}
+
+.house-frame {
+  animation: frame-glow 3.6s ease-in-out infinite;
+}
+
+/* Tagline crossfade */
+@keyframes tagline-fade {
+  0%, 100% { opacity: 0; transform: translateY(2px); }
+  15%, 85% { opacity: 1; transform: translateY(0); }
+}
+

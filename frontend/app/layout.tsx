@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RoofTranslate",
+  title: "RoofTranslate · Frazier Media",
   description:
-    "Upload English roofing crew instructions and job notes. Get Spanish-translated PDFs back in seconds.",
+    "Upload English roofing crew instructions and job notes. Get Spanish-translated PDFs back in seconds — formatting preserved. A Frazier Media tool.",
 };
 
 export default function RootLayout({

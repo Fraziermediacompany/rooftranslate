@@ -1,7 +1,137 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDropzone, type FileRejection } from "react-dropzone";
+
+// ---------- Frazier Media chevron ----------
+// Marlboro-red rooftop chevron — doubles as a brand mark and a literal roof.
+const FM_RED = "#E10600";
+
+function FrazierChevron({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size * 0.78}
+      viewBox="0 0 24 18"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M12 1 L23 17 L1 17 Z" fill={FM_RED} />
+    </svg>
+  );
+}
+
+// ---------- Building-roof loader ----------
+// Pure SVG/CSS — no libraries. Shingles drop in row by row on a staggered
+// delay, hold, then fade out and rebuild. Below the roof, a tagline pair
+// crossfades through bilingual progress messages so crews see motion + words
+// during the Render cold-start wait.
+const TAGLINES: { es: string; en: string }[] = [
+  { es: "Subiendo al techo…", en: "Climbing on the roof…" },
+  { es: "Colocando las tejas…", en: "Laying the shingles…" },
+  { es: "Midiendo dos veces…", en: "Measuring twice…" },
+  { es: "Traduciendo a español…", en: "Translating to Spanish…" },
+  { es: "Casi listo…", en: "Almost ready…" },
+];
+
+// Build the shingle grid: 4 rows × 7 columns. Row width tapers near the apex
+// so the result reads as a pitched roof, not a wall.
+const SHINGLE_ROWS = [
+  { y: 22, count: 3, w: 6, gap: 1 },
+  { y: 28, count: 5, w: 6, gap: 1 },
+  { y: 34, count: 7, w: 6, gap: 1 },
+  { y: 40, count: 9, w: 6, gap: 1 },
+];
+
+function RoofLoader() {
+  const [tagIdx, setTagIdx] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(
+      () => setTagIdx((i) => (i + 1) % TAGLINES.length),
+      2400,
+    );
+    return () => clearInterval(id);
+  }, []);
+
+  const tag = TAGLINES[tagIdx];
+
+  return (
+    <div className="flex flex-col items-center">
+      <svg
+        viewBox="0 0 120 100"
+        className="w-40 h-40"
+        aria-label="Building roof loader"
+      >
+        {/* House body */}
+        <rect
+          x="22"
+          y="50"
+          width="76"
+          height="40"
+          fill="none"
+          stroke="#52525b"
+          strokeWidth="1.6"
+          className="house-frame"
+        />
+        {/* Door */}
+        <rect
+          x="52"
+          y="68"
+          width="16"
+          height="22"
+          fill="none"
+          stroke="#52525b"
+          strokeWidth="1.4"
+          className="house-frame"
+        />
+        {/* Roof outline (triangle) */}
+        <path
+          d="M14 50 L60 14 L106 50 Z"
+          fill="none"
+          stroke="#52525b"
+          strokeWidth="1.6"
+          className="house-frame"
+        />
+        {/* Frazier-red ridge cap on top */}
+        <circle cx="60" cy="14" r="1.8" fill={FM_RED} />
+
+        {/* Shingles — staggered animation delay across row+col so they cascade */}
+        {SHINGLE_ROWS.map((row, rowIdx) => {
+          const totalWidth = row.count * row.w + (row.count - 1) * row.gap;
+          const startX = 60 - totalWidth / 2;
+          return Array.from({ length: row.count }).map((_, colIdx) => {
+            const x = startX + colIdx * (row.w + row.gap);
+            const delay = rowIdx * 0.28 + colIdx * 0.06;
+            return (
+              <rect
+                key={`${rowIdx}-${colIdx}`}
+                x={x}
+                y={row.y}
+                width={row.w}
+                height={4}
+                rx={0.6}
+                fill="#3b82f6"
+                className="shingle"
+                style={{ animationDelay: `${delay}s` }}
+              />
+            );
+          });
+        })}
+      </svg>
+
+      {/* Tagline pair, bilingual, crossfading */}
+      <div
+        key={tagIdx}
+        className="mt-2 text-center"
+        style={{ animation: "tagline-fade 2.4s ease-in-out" }}
+      >
+        <div className="text-base text-zinc-100 font-medium">{tag.es}</div>
+        <div className="text-xs text-zinc-500 mt-1">{tag.en}</div>
+      </div>
+    </div>
+  );
+}
 
 type AppState = "idle" | "processing" | "done" | "error";
 
@@ -118,10 +248,10 @@ export default function Home() {
       <main className="hidden md:flex min-h-screen flex-col items-center justify-center px-6 py-16">
         <div className="w-full max-w-xl">
           <header className="text-center mb-10">
-            <div className="inline-flex items-center gap-2 mb-4">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
-              <span className="text-xs uppercase tracking-widest text-zinc-400">
-                Frontline Exterior Solutions
+            <div className="inline-flex items-center gap-2.5 mb-4">
+              <FrazierChevron size={18} />
+              <span className="text-xs uppercase tracking-[0.18em] text-zinc-400 font-medium">
+                Frazier Media
               </span>
             </div>
             <h1 className="text-4xl font-semibold tracking-tight">
@@ -200,15 +330,11 @@ export default function Home() {
           )}
 
           {state === "processing" && (
-            <section className="text-center py-16">
-              <div className="inline-block">
-                <div className="w-16 h-16 rounded-full border-2 border-zinc-700 border-t-blue-400 animate-spin" />
-              </div>
-              <div className="mt-6 text-base text-zinc-200 font-medium">
-                Translating…
-              </div>
-              <div className="mt-2 text-sm text-zinc-500">
-                Extracting text, translating, rebuilding PDFs.
+            <section className="text-center py-10">
+              <RoofLoader />
+              <div className="mt-4 text-xs text-zinc-600 max-w-xs mx-auto">
+                First translation of the day takes ~30 seconds while the server
+                wakes up. After that it&apos;s instant.
               </div>
             </section>
           )}
@@ -259,7 +385,12 @@ export default function Home() {
           )}
 
           <footer className="mt-16 text-center text-xs text-zinc-600">
-            v0.1 · text-based PDFs only · scanned PDFs not yet supported
+            <div className="flex items-center justify-center gap-1.5">
+              <FrazierChevron size={9} />
+              <span>
+                RoofTranslate v1.1 · A Frazier Media tool · text-based PDFs only
+              </span>
+            </div>
           </footer>
         </div>
       </main>
