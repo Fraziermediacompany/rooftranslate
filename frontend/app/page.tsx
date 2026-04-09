@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDropzone, type FileRejection } from "react-dropzone";
+import dynamic from "next/dynamic";
+import loaderAnimation from "../public/loader.json";
+
+// lottie-react ships DOM-only code, so dynamically import it client-side only
+const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 
 // ---------- Frazier Media chevron ----------
 // The Frazier Media mark: a red rectangle with a triangular notch cut out of
@@ -31,11 +36,10 @@ function FrazierChevron({ size = 22 }: { size?: number }) {
   );
 }
 
-// ---------- Building-roof loader ----------
-// Pure SVG/CSS — no libraries. Shingles drop in row by row on a staggered
-// delay, hold, then fade out and rebuild. Below the roof, a tagline pair
-// crossfades through bilingual progress messages so crews see motion + words
-// during the Render cold-start wait.
+// ---------- Building loader (Lottie + bilingual taglines) ----------
+// The roof/house illustration comes from a Lottie file in /public.
+// Below the animation, a tagline pair crossfades through bilingual progress
+// messages so crews see motion + words during the Render cold-start wait.
 const TAGLINES: { es: string; en: string }[] = [
   { es: "Subiendo al techo…", en: "Climbing on the roof…" },
   { es: "Colocando las tejas…", en: "Laying the shingles…" },
@@ -43,50 +47,6 @@ const TAGLINES: { es: string; en: string }[] = [
   { es: "Traduciendo a español…", en: "Translating to Spanish…" },
   { es: "Casi listo…", en: "Almost ready…" },
 ];
-
-// ---------- Isometric shingle layout ----------
-// The visible roof slope is a parallelogram defined by 4 points:
-//   ridge-front (92,55) → eave-front (130,90) → eave-back (165,75) → ridge-back (127,40)
-// Two basis vectors describe how to walk across that slope:
-//   SLOPE_VEC: ridge → eave   (down the pitch)
-//   DEPTH_VEC: front → back   (along the ridge into perspective)
-// Each shingle is a small parallelogram tiled in (row, col) coordinates.
-const SLOPE_ORIGIN = { x: 92, y: 55 };
-const SLOPE_VEC = { x: 38, y: 35 };
-const DEPTH_VEC = { x: 35, y: -15 };
-const SHINGLE_ROWS_COUNT = 4;
-const SHINGLE_COLS_COUNT = 5;
-
-type Shingle = { points: string; delay: number };
-
-function buildShingles(): Shingle[] {
-  const out: Shingle[] = [];
-  const gap = 0.04;
-  const at = (s: number, d: number) => ({
-    x: SLOPE_ORIGIN.x + SLOPE_VEC.x * s + DEPTH_VEC.x * d,
-    y: SLOPE_ORIGIN.y + SLOPE_VEC.y * s + DEPTH_VEC.y * d,
-  });
-  for (let row = 0; row < SHINGLE_ROWS_COUNT; row++) {
-    for (let col = 0; col < SHINGLE_COLS_COUNT; col++) {
-      const sa = row / SHINGLE_ROWS_COUNT + gap;
-      const sb = (row + 1) / SHINGLE_ROWS_COUNT - gap;
-      const da = col / SHINGLE_COLS_COUNT + gap;
-      const db = (col + 1) / SHINGLE_COLS_COUNT - gap;
-      const tl = at(sa, da);
-      const tr = at(sa, db);
-      const br = at(sb, db);
-      const bl = at(sb, da);
-      out.push({
-        points: `${tl.x.toFixed(1)},${tl.y.toFixed(1)} ${tr.x.toFixed(1)},${tr.y.toFixed(1)} ${br.x.toFixed(1)},${br.y.toFixed(1)} ${bl.x.toFixed(1)},${bl.y.toFixed(1)}`,
-        // Stagger from top-back to bottom-front for a natural cascade
-        delay: row * 0.16 + col * 0.05,
-      });
-    }
-  }
-  return out;
-}
-
-const SHINGLES: Shingle[] = buildShingles();
 
 function RoofLoader() {
   const [tagIdx, setTagIdx] = useState(0);
@@ -103,254 +63,9 @@ function RoofLoader() {
 
   return (
     <div className="flex flex-col items-center">
-      <svg
-        viewBox="0 0 200 180"
-        className="w-52 h-52"
-        aria-label="Building roof loader"
-        style={{
-          // Faux 3D yaw rotation: tilts the whole flat SVG illustration
-          // to the left in space, as if the house turned 40° on a turntable.
-          transform: "perspective(700px) rotateY(-40deg)",
-          transformOrigin: "center center",
-        }}
-      >
-        <defs>
-          {/* ----- Surface gradients (white walls with subtle shading for depth) ----- */}
-          <linearGradient id="frontWall" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ffffff" />
-            <stop offset="100%" stopColor="#e4e4e7" />
-          </linearGradient>
-          <linearGradient id="sideWall" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#d4d4d8" />
-            <stop offset="100%" stopColor="#a1a1aa" />
-          </linearGradient>
-          <linearGradient id="gable" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ffffff" />
-            <stop offset="100%" stopColor="#e4e4e7" />
-          </linearGradient>
-          <linearGradient id="roofBase" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#a1a1aa" />
-            <stop offset="100%" stopColor="#71717a" />
-          </linearGradient>
-
-          {/* ----- Shingle gradient (white with soft shading for tile depth) ----- */}
-          <linearGradient id="shingle" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#ffffff" />
-            <stop offset="35%" stopColor="#f4f4f5" />
-            <stop offset="80%" stopColor="#d4d4d8" />
-            <stop offset="100%" stopColor="#a1a1aa" />
-          </linearGradient>
-
-          {/* ----- Light sweep gradient (specular highlight) ----- */}
-          <linearGradient id="lightSweep" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="white" stopOpacity="0" />
-            <stop offset="50%" stopColor="white" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="white" stopOpacity="0" />
-          </linearGradient>
-
-          {/* ----- Ground shadow (radial) ----- */}
-          <radialGradient id="groundShadow" cx="0.5" cy="0.5" r="0.5">
-            <stop offset="0%" stopColor="black" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="black" stopOpacity="0" />
-          </radialGradient>
-
-          {/* ----- Drop shadow filter for the whole house ----- */}
-          <filter id="houseShadow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur in="SourceAlpha" stdDeviation="2.2" />
-            <feOffset dx="2" dy="3" result="off" />
-            <feComponentTransfer>
-              <feFuncA type="linear" slope="0.45" />
-            </feComponentTransfer>
-            <feMerge>
-              <feMergeNode />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-
-          {/* ----- Subtle inner shadow for shingle depth ----- */}
-          <filter id="shingleDepth" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur in="SourceAlpha" stdDeviation="0.4" />
-            <feOffset dx="0.4" dy="0.6" result="off" />
-            <feComponentTransfer>
-              <feFuncA type="linear" slope="0.6" />
-            </feComponentTransfer>
-            <feMerge>
-              <feMergeNode />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-
-          {/* ----- Clip path so the light sweep only shows on the roof slope ----- */}
-          <clipPath id="roofClip">
-            <polygon points="92,55 130,90 165,75 127,40" />
-          </clipPath>
-
-          {/* ----- Wood-plank pattern for the door ----- */}
-          <pattern
-            id="doorPlanks"
-            x="0"
-            y="0"
-            width="3"
-            height="25"
-            patternUnits="userSpaceOnUse"
-          >
-            <rect width="3" height="25" fill="#1c1917" />
-            <line
-              x1="3"
-              y1="0"
-              x2="3"
-              y2="25"
-              stroke="#0c0a09"
-              strokeWidth="0.4"
-            />
-          </pattern>
-        </defs>
-
-        {/* Soft ground shadow under the house */}
-        <ellipse
-          cx="108"
-          cy="155"
-          rx="75"
-          ry="6"
-          fill="url(#groundShadow)"
-        />
-
-        {/* House body — wrapped in drop-shadow filter */}
-        <g filter="url(#houseShadow)">
-          {/* Side wall (right side, in slight shadow) */}
-          <polygon
-            points="130,140 165,125 165,75 130,90"
-            fill="url(#sideWall)"
-          />
-          {/* Front wall */}
-          <polygon
-            points="55,140 130,140 130,90 55,90"
-            fill="url(#frontWall)"
-          />
-          {/* Front-corner edge shadow line (where front meets side) */}
-          <line
-            x1="130"
-            y1="90"
-            x2="130"
-            y2="140"
-            stroke="#a1a1aa"
-            strokeWidth="0.6"
-          />
-
-          {/* Gable triangle */}
-          <polygon points="55,90 130,90 92,55" fill="url(#gable)" />
-          {/* Eave line at top of front wall */}
-          <line
-            x1="55"
-            y1="90"
-            x2="130"
-            y2="90"
-            stroke="#0a0a0c"
-            strokeWidth="0.5"
-          />
-
-          {/* Roof slope base layer (dark, under shingles) */}
-          <polygon
-            points="92,55 130,90 165,75 127,40"
-            fill="url(#roofBase)"
-          />
-        </g>
-
-        {/* Window on the front wall — 4-pane */}
-        <g>
-          <rect
-            x="66"
-            y="100"
-            width="16"
-            height="16"
-            fill="#0a0a0c"
-            stroke="#52525b"
-            strokeWidth="0.5"
-          />
-          <line
-            x1="74"
-            y1="100"
-            x2="74"
-            y2="116"
-            stroke="#52525b"
-            strokeWidth="0.4"
-          />
-          <line
-            x1="66"
-            y1="108"
-            x2="82"
-            y2="108"
-            stroke="#52525b"
-            strokeWidth="0.4"
-          />
-          {/* Window glow (warm interior light, very subtle) */}
-          <rect
-            x="66.6"
-            y="100.6"
-            width="14.8"
-            height="14.8"
-            fill="#fbbf24"
-            opacity="0.08"
-          />
-        </g>
-
-        {/* Door with wood-plank pattern */}
-        <g>
-          <rect
-            x="92"
-            y="115"
-            width="22"
-            height="25"
-            fill="url(#doorPlanks)"
-            stroke="#52525b"
-            strokeWidth="0.5"
-          />
-          {/* Doorknob */}
-          <circle cx="110" cy="128" r="0.8" fill="#d4af37" />
-        </g>
-
-        {/* Shingles cascading on the slanted roof slope */}
-        <g>
-          {SHINGLES.map((s, i) => (
-            <polygon
-              key={i}
-              points={s.points}
-              fill="url(#shingle)"
-              className="shingle"
-              filter="url(#shingleDepth)"
-              style={{ animationDelay: `${s.delay}s` }}
-            />
-          ))}
-        </g>
-
-        {/* Animated light sweep — clipped to the roof slope.
-            Outer <g> handles the rotation (matches roof slope angle).
-            Inner <rect> handles the translation animation. */}
-        <g clipPath="url(#roofClip)">
-          <g transform="rotate(-22 100 70)">
-            <rect
-              x="-40"
-              y="20"
-              width="50"
-              height="100"
-              fill="url(#lightSweep)"
-              className="light-sweep"
-              style={{ pointerEvents: "none" }}
-            />
-          </g>
-        </g>
-
-        {/* Ridge line (where the front gable meets the side roof) */}
-        <line
-          x1="92"
-          y1="55"
-          x2="127"
-          y2="40"
-          stroke="#0a0a0c"
-          strokeWidth="0.7"
-        />
-
-      </svg>
+      <div className="w-64 h-64">
+        <Lottie animationData={loaderAnimation} loop autoplay />
+      </div>
 
       {/* Tagline pair, bilingual, crossfading */}
       <div
@@ -364,6 +79,7 @@ function RoofLoader() {
     </div>
   );
 }
+
 
 type AppState = "idle" | "processing" | "done" | "error";
 
