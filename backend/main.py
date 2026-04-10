@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from .access import AccessStore
+from .ghl import notify_purchase
 from .pipeline import ScannedPDFError, process_many, process_pdf
 
 
@@ -121,6 +122,16 @@ async def stripe_webhook(request: Request):
                 stripe_session_id=getattr(session, "id", ""),
             )
 
+            # Best-effort: create GHL contact + send welcome email
+            notify_purchase(
+                email=email,
+                name=name,
+                phone=phone or "",
+                company=company,
+                access_code=code,
+                founding_number=founding_number,
+            )
+
     return {"ok": True}
 
 
@@ -168,6 +179,16 @@ def claim_code(session_id: str):
         company=company,
         phone=phone or "",
         stripe_session_id=session_id,
+    )
+
+    # Best-effort: create GHL contact + send welcome email
+    notify_purchase(
+        email=email,
+        name=name,
+        phone=phone or "",
+        company=company,
+        access_code=code,
+        founding_number=founding_number,
     )
 
     return {
