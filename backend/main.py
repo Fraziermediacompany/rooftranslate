@@ -1,4 +1,4 @@
-"""FastAPI app — exposes POST /translate.
+"""FastAPI app — exposes POST /translate with paywall.
 
 Accepts multipart PDF uploads, runs them through the pipeline, and returns
 a ZIP of translated PDFs (or a single 422 if a single-file request fails
@@ -10,6 +10,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import stripe
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -17,6 +18,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from .access import AccessStore
 from .pipeline import ScannedPDFError, process_many, process_pdf
 
 
@@ -32,6 +34,17 @@ ALLOWED_ORIGINS = [
 ]
 # Allow any *.vercel.app preview deploy too (regex match in CORS).
 ALLOW_ORIGIN_REGEX = r"https://.*\.vercel\.app"
+
+# Initialize Stripe
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+PAYWALL_ENABLED = os.getenv("PAYWALL_ENABLED", "").lower() == "true"
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+# Initialize access code store
+access_store = AccessStore()
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="RoofTranslate API", version="0.2.0")
@@ -57,9 +70,78 @@ def health():
     return {"ok": True}
 
 
+@app.get("/verify-code/{code}")
+def verify_code(code: str):
+    """Verify an access code and return its status."""
+    return access_store.verify_code(code)
+
+
+@app.get("/founding-crew-count")
+def founding_crew_count():
+    """Return count of issued codes and limit."""
+    return {"count": access_store.get_count(), "limit": 100}
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events (checkout.session.completed).
+
+    Validates the webhook signature and issues access codes for completed payments.
+    """
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=400, detail="Webhook secret not configured.")
+
+    body = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    try:
+        event = stripe.Webhook.construct_event(body, sig_header, STRIPE_WEBHOOK_SECRET)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload.")
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid signature.")
+
+    # Handle checkout.session.completed
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        email = session.get("customer_details", {}).get("email", "")
+        name = session.get("customer_details", {}).get("name", "")
+        phone = session.get("customer_details", {}).get("phone", "")
+
+        if email and name:
+            # Extract company from name or use a default
+            company = name.split()[0] if name else "N/A"
+
+            # Issue access code
+            code, founding_number = access_store.issue_code(
+                email=email,
+                company=company,
+                phone=phone or "",
+                stripe_session_id=session.get("id", ""),
+            )
+
+    return {"ok": True}
+
+
 @app.post("/translate")
 @limiter.limit("10/hour")
 async def translate(request: Request, files: list[UploadFile] = File(...)):
+    # Verify access code if paywall is enabled
+    if PAYWALL_ENABLED:
+        access_code = request.headers.get("X-Access-Code", "").strip()
+        if not access_code:
+            raise HTTPException(
+                status_code=403,
+                detail="Access code required. Visit rooftranslate.com to get started.",
+            )
+
+        result = access_store.verify_code(access_code)
+        if not result.get("valid"):
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid or expired access code.",
+            )
+
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
 

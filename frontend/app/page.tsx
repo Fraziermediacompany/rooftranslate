@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDropzone, type FileRejection } from "react-dropzone";
 import dynamic from "next/dynamic";
 import loaderAnimation from "../public/loader.json";
+import Link from "next/link";
 
 // lottie-react ships DOM-only code, so dynamically import it client-side only
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
@@ -88,10 +89,261 @@ const API_URL =
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 
+const STRIPE_PAYMENT_LINK = "https://buy.stripe.com/5kQ28q2B05iN04qciE4ko07";
+const EVENT_PAYMENT_LINK = "https://buy.stripe.com/28EaEW0sS8uZcRc96s4ko08";
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Code entry modal
+interface CodeEntryProps {
+  onClose: () => void;
+  onSuccess: (code: string) => void;
+  isOpen: boolean;
+}
+
+function CodeEntryModal({ onClose, onSuccess, isOpen }: CodeEntryProps) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!code.trim()) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`${API_URL}/verify-code/${code.trim()}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!res.ok) {
+        throw new Error("Invalid or expired code");
+      }
+
+      // Valid code - save to localStorage and close
+      localStorage.setItem("rooftranslate_access_code", code.trim());
+      onSuccess(code.trim());
+      onClose();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Invalid or expired code";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-[#161618] rounded-2xl border border-zinc-800 max-w-sm w-full p-6">
+        <h2 className="text-xl font-semibold mb-2">Enter Your Access Code</h2>
+        <p className="text-sm text-zinc-400 mb-6">
+          Check your email for your RoofTranslate Founding Crew access code.
+        </p>
+
+        <form onSubmit={handleSubmit}>
+          <input
+            type="text"
+            placeholder="RT-XXXX-XXXX"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            className="w-full px-4 py-3 rounded-lg bg-[#0a0a0a] border border-zinc-700 text-white placeholder-zinc-600 focus:border-blue-500 focus:outline-none transition-colors"
+            disabled={loading}
+          />
+
+          {error && (
+            <div className="mt-4 text-sm text-red-400">
+              {error}. Need one? <a href={STRIPE_PAYMENT_LINK} className="text-blue-400 hover:text-blue-300 underline">Buy here</a>
+            </div>
+          )}
+
+          <div className="flex gap-3 mt-6">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors text-sm font-medium"
+              disabled={loading}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="flex-1 py-3 rounded-lg bg-blue-600 hover:bg-blue-500 transition-colors text-sm font-medium disabled:opacity-50"
+              disabled={loading}
+            >
+              {loading ? "Verifying..." : "Verify"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// Landing page for users without access code
+interface LandingPageProps {
+  onCodeEntered: () => void;
+  spotsRemaining: number | null;
+}
+
+function LandingPage({ onCodeEntered, spotsRemaining }: LandingPageProps) {
+  const [showCodeModal, setShowCodeModal] = useState(false);
+
+  return (
+    <>
+      <CodeEntryModal
+        isOpen={showCodeModal}
+        onClose={() => setShowCodeModal(false)}
+        onSuccess={onCodeEntered}
+      />
+
+      <main className="min-h-screen flex flex-col items-center justify-center px-6 py-16">
+        <div className="w-full max-w-2xl">
+          {/* Header */}
+          <header className="text-center mb-12">
+            <div className="inline-flex items-center gap-2.5 mb-4">
+              <FrazierChevron size={18} />
+              <span className="text-xs uppercase tracking-[0.18em] text-zinc-400 font-medium">
+                Frazier Media
+              </span>
+            </div>
+            <h1 className="text-5xl md:text-6xl font-semibold tracking-tight mb-4">
+              RoofTranslate
+            </h1>
+            <p className="text-lg text-zinc-400 max-w-xl mx-auto">
+              Instant Spanish translations for roofing crew instructions and job notes. Formatting preserved.
+            </p>
+          </header>
+
+          {/* Price section */}
+          <div className="bg-[#161618] border border-zinc-800 rounded-2xl p-8 mb-8">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center gap-3">
+                <span className="text-lg text-zinc-500 line-through">
+                  $97/mo
+                </span>
+                <div className="h-8 w-px bg-zinc-700" />
+                <div>
+                  <div className="text-4xl font-bold">$250</div>
+                  <div className="text-sm text-zinc-400">/year</div>
+                </div>
+              </div>
+              <div className="mt-4 text-sm font-medium text-blue-400">
+                Founding Crew Price (Limited to 100 spots)
+              </div>
+            </div>
+
+            {/* Value props */}
+            <div className="space-y-4 mb-8">
+              <div className="flex gap-3">
+                <div className="text-blue-400 mt-1 flex-shrink-0">✓</div>
+                <div>
+                  <div className="font-medium">Instant Translation</div>
+                  <div className="text-sm text-zinc-400">
+                    Get Spanish PDFs back in seconds
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="text-blue-400 mt-1 flex-shrink-0">✓</div>
+                <div>
+                  <div className="font-medium">Formatting Preserved</div>
+                  <div className="text-sm text-zinc-400">
+                    Tables, headers, and layout stay intact
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="text-blue-400 mt-1 flex-shrink-0">✓</div>
+                <div>
+                  <div className="font-medium">Crew-Ready</div>
+                  <div className="text-sm text-zinc-400">
+                    Translations optimized for roofing work
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="text-blue-400 mt-1 flex-shrink-0">✓</div>
+                <div>
+                  <div className="font-medium">OSHA Terms Included</div>
+                  <div className="text-sm text-zinc-400">
+                    Safety terminology accurately translated
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Spots remaining */}
+            {spotsRemaining !== null && (
+              <div className="mb-8 p-4 bg-[#0a0a0a] rounded-lg border border-zinc-700">
+                <div className="text-sm text-zinc-400">
+                  <span className="font-semibold text-zinc-200">{spotsRemaining} of 100</span> Founding Crew spots remaining
+                </div>
+                <div className="mt-2 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 transition-all"
+                    style={{ width: `${(spotsRemaining / 100) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* CTA */}
+            <a
+              href={STRIPE_PAYMENT_LINK}
+              className="block w-full py-4 px-6 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 hover:from-blue-400 hover:to-blue-600 text-white font-semibold text-center transition-colors mb-4"
+            >
+              Claim My Founding Crew Spot — $250/yr
+            </a>
+
+            {/* Code entry link */}
+            <button
+              onClick={() => setShowCodeModal(true)}
+              className="w-full text-center text-sm text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              Already have a code? Enter it here
+            </button>
+          </div>
+
+          {/* Event section */}
+          <div className="bg-[#161618] border border-zinc-800 rounded-2xl p-8 mb-12 text-center">
+            <div className="text-sm font-medium text-zinc-400 mb-3">SPECIAL OFFER</div>
+            <h3 className="text-2xl font-semibold mb-2">
+              2-Day Live Training in Naples, FL
+            </h3>
+            <p className="text-zinc-400 mb-4">
+              May 1-2, 2026 · Founding Crew members get <span className="text-green-400 font-semibold">$500 off</span>
+            </p>
+            <a
+              href={EVENT_PAYMENT_LINK}
+              className="text-blue-400 hover:text-blue-300 text-sm font-medium transition-colors"
+            >
+              Learn more &rarr;
+            </a>
+          </div>
+
+          {/* Footer */}
+          <footer className="text-center text-xs text-zinc-600">
+            <div className="flex items-center justify-center gap-1.5 mb-3">
+              <FrazierChevron size={9} />
+              <span>RoofTranslate · A Frazier Media tool</span>
+            </div>
+            <div className="text-zinc-700">
+              Files are processed in memory and deleted immediately. We never store your PDFs.
+            </div>
+          </footer>
+        </div>
+      </main>
+    </>
+  );
 }
 
 export default function Home() {
@@ -99,11 +351,25 @@ export default function Home() {
   const [state, setState] = useState<AppState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [zipUrl, setZipUrl] = useState<string | null>(null);
+  const [accessCode, setAccessCode] = useState<string | null>(null);
+  const [spotsRemaining, setSpotsRemaining] = useState<number | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
-  // Cold-start warmup: ping the backend on page load so Render's free tier
-  // is awake by the time the user picks a PDF and clicks Translate. This
-  // shaves the perceived wait by ~25 seconds for the first user of the day.
+  // Initialize on mount: check localStorage for access code, fetch spots count
   useEffect(() => {
+    const stored = localStorage.getItem("rooftranslate_access_code");
+    setAccessCode(stored);
+    setHydrated(true);
+
+    // Fetch founding crew spots remaining
+    fetch(`${API_URL}/founding-crew-count`, { method: "GET", cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => setSpotsRemaining(data.spots_remaining || 0))
+      .catch(() => {
+        /* If we can't fetch, just don't show the count */
+      });
+
+    // Cold-start warmup: ping the backend
     fetch(`${API_URL}/health`, { method: "GET", cache: "no-store" }).catch(
       () => {
         /* warmup is best-effort; never surface errors */
@@ -160,9 +426,16 @@ export default function Home() {
     try {
       const fd = new FormData();
       for (const f of files) fd.append("files", f, f.name);
+
+      const headers: HeadersInit = {};
+      if (accessCode) {
+        headers["X-Access-Code"] = accessCode;
+      }
+
       const res = await fetch(`${API_URL}/translate`, {
         method: "POST",
         body: fd,
+        headers,
       });
       if (!res.ok) {
         let msg = `Server error (${res.status})`;
@@ -190,6 +463,16 @@ export default function Home() {
     [files],
   );
 
+  // If not hydrated yet (checking localStorage), show nothing to avoid hydration mismatch
+  if (!hydrated) {
+    return null;
+  }
+
+  // If user doesn't have an access code, show the landing page
+  if (!accessCode) {
+    return <LandingPage onCodeEntered={() => setAccessCode(localStorage.getItem("rooftranslate_access_code") || null)} spotsRemaining={spotsRemaining} />;
+  }
+
   return (
     <>
       {/* Mobile fallback */}
@@ -213,9 +496,14 @@ export default function Home() {
                 Frazier Media
               </span>
             </div>
-            <h1 className="text-4xl font-semibold tracking-tight">
-              RoofTranslate
-            </h1>
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <h1 className="text-4xl font-semibold tracking-tight">
+                RoofTranslate
+              </h1>
+              <span className="px-2.5 py-1 text-xs font-semibold bg-blue-500/20 text-blue-300 rounded-full border border-blue-500/30">
+                Founding Crew
+              </span>
+            </div>
             <p className="mt-3 text-sm text-zinc-400 max-w-md mx-auto">
               Upload English crew instructions and job notes. Get
               Spanish-translated PDFs back in seconds — formatting preserved.
