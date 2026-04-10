@@ -123,6 +123,58 @@ async def stripe_webhook(request: Request):
     return {"ok": True}
 
 
+@app.get("/claim-code/{session_id}")
+def claim_code(session_id: str):
+    """Look up or issue an access code for a completed Stripe checkout session.
+
+    First checks if a code was already issued (e.g. by the webhook).
+    If not, verifies the session with Stripe and issues a new code.
+    This handles the race condition where the welcome page loads
+    before the webhook fires.
+    """
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payments not configured.")
+
+    # Check if code already issued for this session (webhook may have fired first)
+    existing_code = access_store.find_by_session(session_id)
+    if existing_code:
+        entry = access_store.codes[existing_code]
+        return {
+            "code": existing_code,
+            "founding_number": entry["founding_number"],
+            "company": entry["company"],
+        }
+
+    # Webhook hasn't fired yet — verify with Stripe directly
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid session ID.")
+
+    if session.payment_status != "paid":
+        raise HTTPException(status_code=402, detail="Payment not completed.")
+
+    # Issue the code
+    email = (session.customer_details or {}).get("email", "") if hasattr(session, "customer_details") and session.customer_details else ""
+    name = (session.customer_details or {}).get("name", "") if hasattr(session, "customer_details") and session.customer_details else ""
+    phone = (session.customer_details or {}).get("phone", "") if hasattr(session, "customer_details") and session.customer_details else ""
+
+    company = name.split()[0] if name else "N/A"
+
+    code, founding_number = access_store.issue_code(
+        email=email,
+        company=company,
+        phone=phone or "",
+        stripe_session_id=session_id,
+    )
+
+    return {
+        "code": code,
+        "founding_number": founding_number,
+        "company": company,
+    }
+
+
 @app.post("/translate")
 @limiter.limit("10/hour")
 async def translate(request: Request, files: List[UploadFile] = File(...)):

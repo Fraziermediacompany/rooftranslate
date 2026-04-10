@@ -146,6 +146,16 @@ class AccessStore:
             "founding_number": entry["founding_number"],
         }
 
+    def find_by_session(self, stripe_session_id: str) -> str | None:
+        """Find an existing code by its Stripe session ID.
+
+        Returns the code string if found, or None.
+        """
+        for code, entry in self.codes.items():
+            if entry.get("stripe_session_id") == stripe_session_id:
+                return code
+        return None
+
     def get_count(self) -> int:
         """Return the number of issued codes."""
         return len(self.codes)
