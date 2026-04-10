@@ -4,11 +4,11 @@ Accepts multipart PDF uploads, runs them through the pipeline, and returns
 a ZIP of translated PDFs (or a single 422 if a single-file request fails
 at the pipeline level — e.g. a scanned/image-only PDF).
 """
-from __future__ import annotations
 
 import os
 import tempfile
 from pathlib import Path
+from typing import List
 
 import stripe
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -125,7 +125,7 @@ async def stripe_webhook(request: Request):
 
 @app.post("/translate")
 @limiter.limit("10/hour")
-async def translate(request: Request, files: list[UploadFile] = File(...)):
+async def translate(request: Request, files: List[UploadFile] = File(...)):
     # Verify access code if paywall is enabled
     if PAYWALL_ENABLED:
         access_code = request.headers.get("X-Access-Code", "").strip()
