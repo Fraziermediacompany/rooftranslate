@@ -7,8 +7,6 @@ at the pipeline level — e.g. a scanned/image-only PDF).
 
 import os
 import tempfile
-import threading
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -69,45 +67,8 @@ def root():
     return {"name": "RoofTranslate API", "version": "0.2.0", "ok": True}
 
 
-# Track last drip run so we only process once per day
-_last_drip_run: str = ""
-_drip_lock = threading.Lock()
-
-
-def _maybe_run_drip():
-    """Run drip processing once per day, triggered by health checks.
-
-    Uses a simple date string guard — if today's date matches the last run,
-    skip. This means the first health check each day triggers the drip.
-    Runs in a background thread so it doesn't slow down the health response.
-    """
-    global _last_drip_run
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    with _drip_lock:
-        if _last_drip_run == today:
-            return
-        _last_drip_run = today
-
-    # Run in background so health check returns fast
-    def _run():
-        try:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"Auto-drip triggered for {today}")
-            result = process_drip()
-            logger.info(f"Auto-drip result: {result}")
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Auto-drip error: {e}")
-
-    threading.Thread(target=_run, daemon=True).start()
-
-
 @app.get("/health")
 def health():
-    # Piggyback drip processing on health checks (runs once per day)
-    _maybe_run_drip()
     return {"ok": True}
 
 
