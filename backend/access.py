@@ -44,6 +44,9 @@ class AccessStore:
         # Try to load from env var backup (JSON string)
         self._load_from_env()
 
+        # Hydrate from GHL (durable source of truth)
+        self._hydrate_from_ghl()
+
     def _load_from_env(self) -> None:
         """Load codes from ACCESS_CODES_BACKUP env var (JSON string)."""
         backup = os.getenv("ACCESS_CODES_BACKUP", "").strip()
@@ -56,6 +59,40 @@ class AccessStore:
                 self.codes = data
         except (json.JSONDecodeError, ValueError):
             # Silently fail if backup is malformed; start fresh
+            pass
+
+    def _hydrate_from_ghl(self) -> None:
+        """Pull access codes from GHL contacts on startup.
+
+        GHL is the durable source of truth. Codes are stored as contact tags
+        in the format `rt:RT-XXXX-XXXX`. This ensures codes survive Render
+        restarts without needing a database.
+        """
+        try:
+            from .ghl import hydrate_codes_from_ghl
+            ghl_codes = hydrate_codes_from_ghl()
+            if ghl_codes:
+                # Merge: GHL codes fill in anything not already in memory
+                for code, entry in ghl_codes.items():
+                    if code not in self.codes:
+                        # Reconstruct a proper expiry from issued_at if available
+                        issued_at = entry.get("issued_at", "")
+                        if issued_at:
+                            try:
+                                issued_dt = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
+                                expires_at = (issued_dt + timedelta(days=self.validity_days)).isoformat()
+                                entry["expires_at"] = expires_at
+                            except (ValueError, TypeError):
+                                entry["expires_at"] = (
+                                    datetime.now(timezone.utc) + timedelta(days=self.validity_days)
+                                ).isoformat()
+                        else:
+                            entry["expires_at"] = (
+                                datetime.now(timezone.utc) + timedelta(days=self.validity_days)
+                            ).isoformat()
+                        self.codes[code] = entry
+        except Exception:
+            # Never let GHL hydration failure prevent the server from starting
             pass
 
     def issue_code(
