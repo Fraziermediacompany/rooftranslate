@@ -72,19 +72,47 @@ def health():
 
 @app.get("/debug-translate")
 def debug_translate():
-    """Quick diagnostic: test if the Anthropic API is reachable."""
+    """Diagnostic: test the exact translation flow."""
+    import json as _json
     try:
         from anthropic import Anthropic
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
             return {"ok": False, "error": "ANTHROPIC_API_KEY not set"}
         client = Anthropic(api_key=api_key)
-        msg = client.messages.create(
+
+        # Test 1: simple call
+        msg1 = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=30,
             messages=[{"role": "user", "content": "Say 'hola' and nothing else."}],
         )
-        return {"ok": True, "response": msg.content[0].text}
+        t1 = msg1.content[0].text
+
+        # Test 2: with system prompt + prefill (same as translate code)
+        test_payload = _json.dumps([{"i": 0, "t": "JOB NOTES:"}, {"i": 1, "t": "Homeowner Name: John Smith"}])
+        try:
+            msg2 = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=512,
+                system="You translate English construction document fragments to Mexican Spanish. Return ONLY a JSON array.",
+                messages=[
+                    {"role": "user", "content": test_payload},
+                    {"role": "assistant", "content": "["},
+                ],
+            )
+            t2 = "[" + msg2.content[0].text
+        except Exception as e2:
+            t2 = f"PREFILL_ERROR: {type(e2).__name__}: {e2}"
+
+        # Test 3: test the actual pipeline import
+        try:
+            from .pipeline import process_pdf as _pp
+            t3 = "pipeline import OK"
+        except Exception as e3:
+            t3 = f"PIPELINE_ERROR: {type(e3).__name__}: {e3}"
+
+        return {"ok": True, "test1_simple": t1, "test2_prefill": t2, "test3_pipeline": t3}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
