@@ -296,3 +296,10 @@ def notify_purchase(
 
     if contact_id:
         _send_welcome_email(contact_id, access_code, founding_number)
+
+        # Enroll in drip sequence
+        try:
+            from .drip_scheduler import enroll_contact
+            enroll_contact(contact_id, tags)
+        except Exception as e:
+            logger.error(f"Drip enrollment failed: {e}")

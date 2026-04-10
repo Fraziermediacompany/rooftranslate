@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from .access import AccessStore
+from .drip_scheduler import process_drip
 from .ghl import notify_purchase
 from .pipeline import ScannedPDFError, process_many, process_pdf
 
@@ -82,6 +83,23 @@ def verify_code(code: str):
 def founding_crew_count():
     """Return count of issued codes and limit."""
     return {"count": access_store.get_count(), "limit": 100}
+
+
+@app.post("/drip/process")
+async def drip_process(request: Request):
+    """Process drip email queue. Hit this daily via cron/scheduler.
+
+    Checks all enrolled contacts and sends any due emails.
+    Protected by a simple bearer token (reuses GHL_API_KEY).
+    """
+    import os
+    expected_token = os.getenv("GHL_API_KEY", "")
+    auth = request.headers.get("Authorization", "")
+    if not expected_token or auth != f"Bearer {expected_token}":
+        raise HTTPException(status_code=401, detail="Unauthorized.")
+
+    result = process_drip()
+    return result
 
 
 @app.post("/stripe/webhook")
