@@ -90,9 +90,10 @@ Each object is one text fragment from the SAME document. Fragments are short
 on their own — that is normal. They came from a structured form.
 
 OUTPUT FORMAT (strict)
-Return ONLY a JSON array of objects with the same indices:
+Your response must start with [ and end with ]. Return ONLY a JSON array:
 [{"i": <int>, "t": "<spanish>"}, ...]
-No prose, no markdown, no code fences, no explanations. Just the JSON.
+No prose, no markdown, no code fences, no explanations. Just the raw JSON array.
+The very first character of your response MUST be [.
 
 CRITICAL — NEVER DO THIS:
 - NEVER write meta-commentary like "(No text was found to translate)" or
@@ -259,9 +260,6 @@ def _translate_claude(blocks: list[dict]) -> list[dict]:
                 system=_CLAUDE_SYSTEM,
                 messages=[
                     {"role": "user", "content": user_msg},
-                    # Prefill: force the response to start as a JSON array so
-                    # the model can't slide into conversational meta-commentary.
-                    {"role": "assistant", "content": "["},
                 ],
             )
         except Exception as e:  # noqa: BLE001
@@ -269,15 +267,19 @@ def _translate_claude(blocks: list[dict]) -> list[dict]:
             # translate it into a friendly user-facing 422 message.
             raise RuntimeError(f"Anthropic API error: {e}") from e
         raw = msg.content[0].text.strip()
-        # Re-attach the prefill "[" since the assistant turn started with it.
-        if not raw.startswith("["):
-            raw = "[" + raw
         # Strip code fences if Claude wrapped the JSON
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw.startswith("json"):
                 raw = raw[4:]
             raw = raw.strip()
+        # Extract JSON array if model added text before/after it
+        if not raw.startswith("["):
+            start = raw.find("[")
+            if start != -1:
+                end = raw.rfind("]")
+                if end != -1:
+                    raw = raw[start:end + 1]
         try:
             parsed = json.loads(raw)
             # Build an index → source map so the sanitizer can compare lengths.
