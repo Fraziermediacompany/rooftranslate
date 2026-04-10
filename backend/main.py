@@ -70,6 +70,25 @@ def health():
     return {"ok": True}
 
 
+@app.get("/debug-translate")
+def debug_translate():
+    """Quick diagnostic: test if the Anthropic API is reachable."""
+    try:
+        from anthropic import Anthropic
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return {"ok": False, "error": "ANTHROPIC_API_KEY not set"}
+        client = Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=30,
+            messages=[{"role": "user", "content": "Say 'hola' and nothing else."}],
+        )
+        return {"ok": True, "response": msg.content[0].text}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/verify-code/{code}")
 def verify_code(code: str):
     """Verify an access code and return its status."""
