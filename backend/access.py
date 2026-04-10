@@ -105,6 +105,8 @@ class AccessStore:
     def verify_code(self, code: str) -> dict:
         """Verify a code and return its status.
 
+        Checks beta codes first (from BETA_CODES env var), then issued codes.
+
         Args:
             code: The access code to verify.
 
@@ -116,6 +118,16 @@ class AccessStore:
             - founding_number: int (only if valid)
             Or {valid: false} if expired/unknown.
         """
+        # Check beta codes first (comma-separated list in env var)
+        beta_codes = [c.strip().upper() for c in os.getenv("BETA_CODES", "").split(",") if c.strip()]
+        if code.upper() in beta_codes:
+            return {
+                "valid": True,
+                "expires_in_days": 999,
+                "company": "Beta Tester",
+                "founding_number": 0,
+            }
+
         if code not in self.codes:
             return {"valid": False}
 
