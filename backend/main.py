@@ -104,20 +104,20 @@ async def stripe_webhook(request: Request):
     # Handle checkout.session.completed
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        email = session.get("customer_details", {}).get("email", "")
-        name = session.get("customer_details", {}).get("name", "")
-        phone = session.get("customer_details", {}).get("phone", "")
+        # Stripe returns StripeObject, not dict — use attribute access
+        cd = getattr(session, "customer_details", None)
+        email = getattr(cd, "email", "") or "" if cd else ""
+        name = getattr(cd, "name", "") or "" if cd else ""
+        phone = getattr(cd, "phone", "") or "" if cd else ""
 
         if email and name:
-            # Extract company from name or use a default
             company = name.split()[0] if name else "N/A"
 
-            # Issue access code
             code, founding_number = access_store.issue_code(
                 email=email,
                 company=company,
                 phone=phone or "",
-                stripe_session_id=session.get("id", ""),
+                stripe_session_id=getattr(session, "id", ""),
             )
 
     return {"ok": True}
@@ -154,10 +154,11 @@ def claim_code(session_id: str):
     if session.payment_status != "paid":
         raise HTTPException(status_code=402, detail="Payment not completed.")
 
-    # Issue the code
-    email = (session.customer_details or {}).get("email", "") if hasattr(session, "customer_details") and session.customer_details else ""
-    name = (session.customer_details or {}).get("name", "") if hasattr(session, "customer_details") and session.customer_details else ""
-    phone = (session.customer_details or {}).get("phone", "") if hasattr(session, "customer_details") and session.customer_details else ""
+    # Issue the code — Stripe returns StripeObject, use attribute access
+    cd = getattr(session, "customer_details", None)
+    email = getattr(cd, "email", "") or "" if cd else ""
+    name = getattr(cd, "name", "") or "" if cd else ""
+    phone = getattr(cd, "phone", "") or "" if cd else ""
 
     company = name.split()[0] if name else "N/A"
 
